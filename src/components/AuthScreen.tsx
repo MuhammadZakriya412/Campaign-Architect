@@ -4,10 +4,18 @@ import {
   HelpCircle, Sparkles, Check, AlertCircle, RefreshCw 
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  sendPasswordResetEmail,
+  updateProfile 
+} from 'firebase/auth';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
 
 export interface UserAccount {
+  uid: string;
   email: string;
-  passwordHash: string; // stored plainly or simple hash for client sandbox
   fullName: string;
   companyName: string;
   createdAt: string;
@@ -32,25 +40,6 @@ export default function AuthScreen({ onAuthSuccess, onGuestAccess }: AuthScreenP
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Helper: Get users from localStorage
-  const getStoredUsers = (): UserAccount[] => {
-    try {
-      const stored = localStorage.getItem('campaign_users');
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
-    }
-  };
-
-  // Helper: Save users to localStorage
-  const saveStoredUsers = (users: UserAccount[]) => {
-    try {
-      localStorage.setItem('campaign_users', JSON.stringify(users));
-    } catch (e) {
-      console.error("Failed to save users database", e);
-    }
-  };
-
   // Password strength check helper
   const getPasswordStrength = (pass: string) => {
     if (!pass) return { score: 0, text: "None", color: "bg-slate-200" };
@@ -68,16 +57,13 @@ export default function AuthScreen({ onAuthSuccess, onGuestAccess }: AuthScreenP
 
   const strength = getPasswordStrength(password);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setInfoMessage(null);
     setIsLoading(true);
 
-    // Simulate small latency for realistic luxurious premium feel
-    setTimeout(() => {
-      const users = getStoredUsers();
-
+    try {
       if (mode === 'login') {
         if (!email || !password) {
           setError("Please provide both email and password.");
@@ -86,13 +72,35 @@ export default function AuthScreen({ onAuthSuccess, onGuestAccess }: AuthScreenP
         }
 
         const normalizedEmail = email.trim().toLowerCase();
-        const user = users.find(u => u.email === normalizedEmail);
+        
+        // Authenticate with Firebase
+        const userCredential = await signInWithEmailAndPassword(auth, normalizedEmail, password);
+        const firebaseUser = userCredential.user;
 
-        if (!user || user.passwordHash !== password) {
-          setError("Invalid email or password combination. Try Hamilton demo or register a new account.");
-          setIsLoading(false);
-          return;
+        // Fetch user metadata from Firestore
+        let loadedFullName = firebaseUser.displayName || "Active User";
+        let loadedCompanyName = "Brand Executive";
+        let loadedCreatedAt = firebaseUser.metadata.creationTime || new Date().toISOString();
+
+        try {
+          const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
+          if (userDoc.exists()) {
+            const data = userDoc.data();
+            loadedFullName = data.fullName || loadedFullName;
+            loadedCompanyName = data.companyName || loadedCompanyName;
+            loadedCreatedAt = data.createdAt || loadedCreatedAt;
+          }
+        } catch (fetchErr) {
+          console.error("Failed to load user metadata from Firestore", fetchErr);
         }
+
+        const user: UserAccount = {
+          uid: firebaseUser.uid,
+          email: normalizedEmail,
+          fullName: loadedFullName,
+          companyName: loadedCompanyName,
+          createdAt: loadedCreatedAt
+        };
 
         onAuthSuccess(user);
       } 
@@ -105,11 +113,6 @@ export default function AuthScreen({ onAuthSuccess, onGuestAccess }: AuthScreenP
         }
 
         const normalizedEmail = email.trim().toLowerCase();
-        if (users.some(u => u.email === normalizedEmail)) {
-          setError("This email is already associated with an active brand license.");
-          setIsLoading(false);
-          return;
-        }
 
         if (password.length < 6) {
           setError("For integrity, passwords must be at least 6 characters in length.");
@@ -117,22 +120,28 @@ export default function AuthScreen({ onAuthSuccess, onGuestAccess }: AuthScreenP
           return;
         }
 
-        const newUser: UserAccount = {
+        // Register in Firebase Auth
+        const userCredential = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
+        const firebaseUser = userCredential.user;
+
+        // Set display name in Auth profile
+        await updateProfile(firebaseUser, { displayName: fullName.trim() });
+
+        const createdAt = new Date().toISOString();
+
+        // Write additional user metadata in Firestore
+        await setDoc(doc(db, "users", firebaseUser.uid), {
           email: normalizedEmail,
-          passwordHash: password,
           fullName: fullName.trim(),
           companyName: companyName.trim(),
-          createdAt: new Date().toISOString()
-        };
+          createdAt
+        });
 
-        const updatedUsers = [...users, newUser];
-        saveStoredUsers(updatedUsers);
-
-        // Pre-fill initial profile data for the new user in localStorage
+        // Write initial brand profile in Firestore
         const initialProfile = {
-          fullName: newUser.fullName,
+          fullName: fullName.trim(),
           role: "Creative Director",
-          companyName: newUser.companyName,
+          companyName: companyName.trim(),
           website: "",
           industry: "",
           targetAudience: "",
@@ -143,7 +152,18 @@ export default function AuthScreen({ onAuthSuccess, onGuestAccess }: AuthScreenP
           brandStory: "",
           copywritingRules: "Strictly avoid hyper-salesy adjectives or shouting in capitals."
         };
-        localStorage.setItem(`campaign_user_profile_${newUser.email}`, JSON.stringify(initialProfile));
+        await setDoc(doc(db, "profiles", firebaseUser.uid), initialProfile);
+
+        // Backup to localStorage for safety / caching
+        localStorage.setItem(`campaign_user_profile_${normalizedEmail}`, JSON.stringify(initialProfile));
+
+        const newUser: UserAccount = {
+          uid: firebaseUser.uid,
+          email: normalizedEmail,
+          fullName: fullName.trim(),
+          companyName: companyName.trim(),
+          createdAt
+        };
 
         onAuthSuccess(newUser);
       } 
@@ -156,16 +176,36 @@ export default function AuthScreen({ onAuthSuccess, onGuestAccess }: AuthScreenP
         }
 
         const normalizedEmail = email.trim().toLowerCase();
-        const user = users.find(u => u.email === normalizedEmail);
-
-        if (user) {
-          setInfoMessage(`Security Reset: Your password is "${user.passwordHash}". (In a production environment, a secure cryptographic link would be dispatched).`);
-        } else {
-          setError("No registered account found with that email address.");
-        }
+        await sendPasswordResetEmail(auth, normalizedEmail);
+        setInfoMessage(`A secure password reset link has been dispatched to ${normalizedEmail}. Please check your email inbox to reset your password.`);
         setIsLoading(false);
       }
-    }, 700);
+    } catch (authErr: any) {
+      console.error("Firebase Auth/Firestore execution failed", authErr);
+      let errMsg = "An unexpected database or authentication exception occurred. Please try again or verify your settings.";
+      
+      const code = authErr.code;
+      if (code === 'auth/operation-not-allowed') {
+        errMsg = `🔑 Firebase Sign-In Provider Disabled\n\nThe Email/Password login method is currently disabled in your Firebase project. To enable it:\n\n1. Go to the Firebase Console for your project.\n2. In the left navigation, click "Build" then select "Authentication".\n3. Click the "Sign-in method" tab.\n4. Click "Add new provider", select "Email/Password", enable it, and save.`;
+      } else if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
+        errMsg = `❌ Invalid Credentials\n\nThe email address or password entered does not match our security records. Please verify your entries, or switch to "Create Publisher Account" if you are establishing a new brand license.`;
+      } else if (code === 'auth/email-already-in-use') {
+        errMsg = `✉️ Email Address Already Associated\n\nThis email is already associated with an active brand license. If you already have an account, please switch to "Sign In", or use the "Forgot Password" link to recover your credentials.`;
+      } else if (code === 'auth/weak-password') {
+        errMsg = `🔒 Password Security Strength Issue\n\nThe password you entered is too simple. For license security and integrity, passwords must be at least 6 characters in length.`;
+      } else if (code === 'auth/network-request-failed') {
+        errMsg = `🌐 Network Connectivity Error\n\nFailed to establish a connection to the Firebase servers. Please verify your network connection and confirm your Firebase project configurations.`;
+      } else if (code === 'auth/too-many-requests') {
+        errMsg = `⚠️ Account Temporarily Locked\n\nAccess has been temporarily disabled due to multiple consecutive failed attempts. You can restore access immediately by resetting your password, or by trying again later.`;
+      } else if (authErr.message && authErr.message.includes('permission-denied')) {
+        errMsg = `🛡️ Firestore Rules Permission Denied\n\nYour write request was rejected by the database security rules. Please verify that your firestore.rules file has been deployed to Firebase.`;
+      } else if (authErr.message) {
+        errMsg = authErr.message;
+      }
+      
+      setError(errMsg);
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -200,11 +240,11 @@ export default function AuthScreen({ onAuthSuccess, onGuestAccess }: AuthScreenP
               initial={{ opacity: 0, y: -5 }} 
               animate={{ opacity: 1, y: 0 }} 
               exit={{ opacity: 0 }}
-              className="mb-5 bg-rose-50 border border-rose-200/50 p-3.5 text-rose-800 text-xs flex items-start gap-2.5"
+              className="mb-5 bg-rose-50 border border-rose-200/50 p-4 text-rose-800 text-xs flex items-start gap-2.5 whitespace-pre-line text-left leading-relaxed"
               id="auth-error-banner"
             >
-              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
-              <div className="font-serif italic leading-relaxed">{error}</div>
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-1" />
+              <div className="font-sans font-normal text-[11px] text-rose-900">{error}</div>
             </motion.div>
           )}
 

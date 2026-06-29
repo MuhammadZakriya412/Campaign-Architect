@@ -84,31 +84,51 @@ export default function UserProfile({ currentUser, isGuest, onLogOut, onSave, cl
 
   // Sync profile when currentUser changes
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(`campaign_user_profile${userKeySuffix}`);
-      if (stored) {
-        setProfile(JSON.parse(stored));
-      } else if (currentUser) {
-        setProfile({
-          fullName: currentUser.fullName,
-          role: "Creative Director",
-          companyName: currentUser.companyName,
-          website: "",
-          industry: "",
-          targetAudience: "",
-          brandVoice: "Authentic, high-end, and editorial.",
-          valueProposition: "",
-          brandColor: "#0284c7",
-          keyProducts: "",
-          brandStory: "",
-          copywritingRules: "Strictly avoid hyper-salesy adjectives or shouting in capitals."
-        });
-      } else {
+    let active = true;
+    async function loadProfile() {
+      if (!currentUser || !currentUser.uid) {
         setProfile(DEFAULT_PROFILE);
+        return;
       }
-    } catch (e) {
-      console.error("Failed to load user profile in effect", e);
+      
+      // Load from localStorage as fast initial cache
+      try {
+        const stored = localStorage.getItem(`campaign_user_profile${userKeySuffix}`);
+        if (stored && active) {
+          setProfile(JSON.parse(stored));
+        }
+      } catch (err) {
+        console.error("Local profile read failed", err);
+      }
+
+      // Fetch from Firestore to ensure synced latest version
+      try {
+        const { doc, getDoc } = await import("firebase/firestore");
+        const { db } = await import("../lib/firebase");
+        const docRef = doc(db, "profiles", currentUser.uid);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists() && active) {
+          const remoteProfile = docSnap.data() as UserProfileData;
+          setProfile(remoteProfile);
+          localStorage.setItem(`campaign_user_profile${userKeySuffix}`, JSON.stringify(remoteProfile));
+          if (onSave) {
+            onSave(remoteProfile);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load user profile from Firestore", err);
+      }
     }
+    
+    if (currentUser && currentUser.uid) {
+      loadProfile();
+    } else {
+      setProfile(DEFAULT_PROFILE);
+    }
+    
+    return () => {
+      active = false;
+    };
   }, [currentUser, userKeySuffix]);
 
   const handleChange = (key: keyof UserProfileData, value: string) => {
@@ -118,10 +138,17 @@ export default function UserProfile({ currentUser, isGuest, onLogOut, onSave, cl
     }));
   };
 
-  const handleSave = (e?: React.FormEvent) => {
+  const handleSave = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     try {
       localStorage.setItem(`campaign_user_profile${userKeySuffix}`, JSON.stringify(profile));
+      
+      if (currentUser && currentUser.uid) {
+        const { doc, setDoc } = await import("firebase/firestore");
+        const { db } = await import("../lib/firebase");
+        await setDoc(doc(db, "profiles", currentUser.uid), profile);
+      }
+      
       if (onSave) {
         onSave(profile);
       }
@@ -132,10 +159,21 @@ export default function UserProfile({ currentUser, isGuest, onLogOut, onSave, cl
     }
   };
 
-  const handleLoadInspiration = () => {
+  const handleLoadInspiration = async () => {
     if (window.confirm("Overwrite your current profile entries with the Eleanor Vance (Atelier & Co.) curated demo?")) {
       setProfile(DEFAULT_PROFILE);
       localStorage.setItem(`campaign_user_profile${userKeySuffix}`, JSON.stringify(DEFAULT_PROFILE));
+      
+      if (currentUser && currentUser.uid) {
+        try {
+          const { doc, setDoc } = await import("firebase/firestore");
+          const { db } = await import("../lib/firebase");
+          await setDoc(doc(db, "profiles", currentUser.uid), DEFAULT_PROFILE);
+        } catch (err) {
+          console.error("Failed to sync Eleanor Vance profile to Firestore", err);
+        }
+      }
+      
       if (onSave) {
         onSave(DEFAULT_PROFILE);
       }

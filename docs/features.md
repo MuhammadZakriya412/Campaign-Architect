@@ -116,4 +116,23 @@ To optimize editorial workflows, prevent visual clutter, and maximize available 
   - **Campaign Logs**: Can be independently minimized to a clean ticker bar or pinned to the workspace grid.
 
 
+---
+
+## 8. Integrated Firebase Cloud Services (Auth & DB)
+
+To support unified multi-device and hybrid production deployments (where the frontend can be deployed to Vercel and the backend to Render), the application integrates native Firebase Authentication and Cloud Firestore.
+
+### Key Benefits
+- **Cross-Platform Synchronization**: Profiles, campaign histories, and generated visual assets are securely synced in the cloud. Signing into Vercel, Render, or a private browser window instantly recovers your active workspace, resolving the limitations of local-only storage.
+- **Unified Auth**: Implements secure, cloud-backed email & password authentication via the Firebase Web SDK.
+- **Offline-First Resilience**: Implements an optimistic, high-performance caching layer using standard `localStorage` as a fast initial data state, which synchronizes in the background with Cloud Firestore as soon as connection is established.
+
+### Database Schemas (Firestore)
+- **`users/{userId}`**: Stores general account metadata such as Full Legal Name, Company/Agency Name, and Creation Timestamp.
+- **`profiles/{userId}`**: Stores the brand voice DNA (industry, target audience, brand color, key products, storytelling rules).
+- **`campaign_histories/{userId}`**: Stores an array of saved campaign generation runs, allowing instant side-by-side comparative loading.
+- **`user_images/{userId}`**: Stores an array of base64-encoded generated imagery and user-uploaded visual assets.
+
+
+
 

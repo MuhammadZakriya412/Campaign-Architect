@@ -19,6 +19,8 @@ import UserProfile, { UserProfileData } from './components/UserProfile';
 import AuthScreen, { UserAccount } from './components/AuthScreen';
 import { motion, AnimatePresence } from 'motion/react';
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+
 export default function App() {
   // Authentication & Session States
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
@@ -50,13 +52,22 @@ export default function App() {
   const [isSetupPinned, setIsSetupPinned] = useState<boolean>(true);
   const [isLogsPinned, setIsLogsPinned] = useState<boolean>(true);
 
-  // 1. Initial Mount: Recover active session or guest token
+  // 1. Initial Mount: Recover active session or guest token, and listen to Firebase Auth
   useEffect(() => {
+    let active = true;
+    
+    // Quick local restore (only if it has a valid uid to prevent legacy mock errors)
     try {
       const activeUserStr = localStorage.getItem('campaign_current_user');
       if (activeUserStr) {
-        setCurrentUser(JSON.parse(activeUserStr));
-        setIsGuest(false);
+        const parsed = JSON.parse(activeUserStr);
+        if (parsed && parsed.uid) {
+          setCurrentUser(parsed);
+          setIsGuest(false);
+        } else {
+          // Remove legacy mock user which did not have uid
+          localStorage.removeItem('campaign_current_user');
+        }
       } else {
         const guestSession = localStorage.getItem('campaign_guest_session');
         if (guestSession === 'active') {
@@ -68,54 +79,159 @@ export default function App() {
     } finally {
       setAuthReady(true);
     }
+
+    // Official Firebase Auth listener
+    let unsubscribe: () => void = () => {};
+
+    Promise.all([
+      import("firebase/auth"),
+      import("./lib/firebase")
+    ]).then(([{ onAuthStateChanged }, { auth, db }]) => {
+      unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+        if (!active) return;
+        if (firebaseUser) {
+          // If signed in, fetch the extra metadata from Firestore
+          let fullName = firebaseUser.displayName || "Active User";
+          let companyName = "Brand Executive";
+          let createdAt = firebaseUser.metadata.creationTime || new Date().toISOString();
+
+          try {
+            const { doc, getDoc } = await import("firebase/firestore");
+            const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
+            if (userDoc.exists()) {
+              const data = userDoc.data();
+              fullName = data.fullName || fullName;
+              companyName = data.companyName || companyName;
+              createdAt = data.createdAt || createdAt;
+            }
+          } catch (err) {
+            console.error("Failed to load user metadata on auth state changed", err);
+          }
+
+          const user: UserAccount = {
+            uid: firebaseUser.uid,
+            email: firebaseUser.email || "",
+            fullName,
+            companyName,
+            createdAt
+          };
+
+          setCurrentUser(user);
+          setIsGuest(false);
+          localStorage.setItem('campaign_current_user', JSON.stringify(user));
+          localStorage.removeItem('campaign_guest_session');
+        } else {
+          // If no firebase user is signed in, check if guest is active, else reset
+          const guestSession = localStorage.getItem('campaign_guest_session');
+          if (guestSession === 'active') {
+            setIsGuest(true);
+            setCurrentUser(null);
+          } else {
+            setCurrentUser(null);
+            setIsGuest(false);
+          }
+        }
+      });
+    });
+
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, []);
 
-  // 2. Load history & images from localStorage (dynamically scoped to user key)
+  // 2. Load history & images from localStorage and Firestore (dynamically scoped to user key)
   useEffect(() => {
     if (!authReady) return;
 
-    try {
+    let active = true;
+
+    async function loadData() {
       const suffix = currentUser ? `_${currentUser.email}` : '';
       
-      // Load History Log
-      const storedHistory = localStorage.getItem(`campaign_history${suffix}`);
-      if (storedHistory) {
-        setHistory(JSON.parse(storedHistory));
-      } else {
-        setHistory([]);
+      // Load History Log from localStorage first as instant cache
+      try {
+        const storedHistory = localStorage.getItem(`campaign_history${suffix}`);
+        if (storedHistory && active) {
+          setHistory(JSON.parse(storedHistory));
+        } else if (active) {
+          setHistory([]);
+        }
+      } catch (e) {
+        console.error('Failed to load storage history', e);
       }
 
-      // Load Saved Visuals
-      const storedImages = localStorage.getItem(`generated_images${suffix}`);
-      if (storedImages) {
-        setGeneratedImages(JSON.parse(storedImages));
-      } else {
-        setGeneratedImages([]);
+      // Load Saved Visuals from localStorage first as instant cache
+      try {
+        const storedImages = localStorage.getItem(`generated_images${suffix}`);
+        if (storedImages && active) {
+          setGeneratedImages(JSON.parse(storedImages));
+        } else if (active) {
+          setGeneratedImages([]);
+        }
+      } catch (e) {
+        console.error('Failed to load storage images', e);
       }
 
-      // Determine Profile Initials
-      const storedProfile = localStorage.getItem(`campaign_user_profile${suffix}`);
-      if (storedProfile) {
-        const parsed = JSON.parse(storedProfile);
-        if (parsed.fullName) {
-          const parts = parsed.fullName.trim().split(/\s+/);
-          const initials = parts.map((p: string) => p[0]).join('').toUpperCase().slice(0, 2);
-          setProfileInitials(initials || 'EV');
+      // Load Profile Initials
+      try {
+        const storedProfile = localStorage.getItem(`campaign_user_profile${suffix}`);
+        if (storedProfile) {
+          const parsed = JSON.parse(storedProfile);
+          if (parsed.fullName) {
+            const parts = parsed.fullName.trim().split(/\s+/);
+            const initials = parts.map((p: string) => p[0]).join('').toUpperCase().slice(0, 2);
+            if (active) setProfileInitials(initials || 'EV');
+          } else {
+            if (active) setProfileInitials(currentUser ? currentUser.fullName.charAt(0) : 'EV');
+          }
         } else {
-          setProfileInitials(currentUser ? currentUser.fullName.charAt(0) : 'EV');
+          if (currentUser) {
+            const parts = currentUser.fullName.trim().split(/\s+/);
+            const initials = parts.map((p: string) => p[0]).join('').toUpperCase().slice(0, 2);
+            if (active) setProfileInitials(initials || 'US');
+          } else {
+            if (active) setProfileInitials('EV');
+          }
         }
-      } else {
-        if (currentUser) {
-          const parts = currentUser.fullName.trim().split(/\s+/);
-          const initials = parts.map((p: string) => p[0]).join('').toUpperCase().slice(0, 2);
-          setProfileInitials(initials || 'US');
-        } else {
-          setProfileInitials('EV'); // Eleanor Vance demo initial
+      } catch (e) {
+        console.error('Failed to parse profile initials', e);
+      }
+
+      // If signed in, fetch up-to-date copies from Firestore in background
+      if (currentUser && currentUser.uid) {
+        try {
+          const { doc, getDoc } = await import("firebase/firestore");
+          const { db } = await import("./lib/firebase");
+
+          // 1. Fetch campaigns
+          const campaignSnap = await getDoc(doc(db, "campaign_histories", currentUser.uid));
+          if (campaignSnap.exists() && active) {
+            const data = campaignSnap.data();
+            const remoteCampaigns = data.campaigns || [];
+            setHistory(remoteCampaigns);
+            localStorage.setItem(`campaign_history${suffix}`, JSON.stringify(remoteCampaigns));
+          }
+
+          // 2. Fetch images
+          const imagesSnap = await getDoc(doc(db, "user_images", currentUser.uid));
+          if (imagesSnap.exists() && active) {
+            const data = imagesSnap.data();
+            const remoteImages = data.images || [];
+            setGeneratedImages(remoteImages);
+            localStorage.setItem(`generated_images${suffix}`, JSON.stringify(remoteImages));
+          }
+        } catch (dbErr) {
+          console.error("Failed background Firestore assets synchronization", dbErr);
         }
       }
-    } catch (e) {
-      console.error('Failed to load storage assets', e);
     }
+
+    loadData();
+
+    return () => {
+      active = false;
+    };
   }, [currentUser, isGuest, authReady]);
 
   // Auto-dismiss success message after 10 seconds
@@ -129,17 +245,43 @@ export default function App() {
   }, [successMsg]);
 
   // Save history helper
-  const saveHistory = (newHistory: EmailCampaign[]) => {
+  const saveHistory = async (newHistory: EmailCampaign[]) => {
     setHistory(newHistory);
     const suffix = currentUser ? `_${currentUser.email}` : '';
     localStorage.setItem(`campaign_history${suffix}`, JSON.stringify(newHistory));
+
+    if (currentUser && currentUser.uid) {
+      try {
+        const { doc, setDoc } = await import("firebase/firestore");
+        const { db } = await import("./lib/firebase");
+        await setDoc(doc(db, "campaign_histories", currentUser.uid), {
+          campaigns: newHistory,
+          updatedAt: new Date().toISOString()
+        });
+      } catch (err) {
+        console.error("Failed to sync campaign history to Firestore", err);
+      }
+    }
   };
 
   // Save images helper
-  const saveImages = (newImages: string[]) => {
+  const saveImages = async (newImages: string[]) => {
     setGeneratedImages(newImages);
     const suffix = currentUser ? `_${currentUser.email}` : '';
     localStorage.setItem(`generated_images${suffix}`, JSON.stringify(newImages));
+
+    if (currentUser && currentUser.uid) {
+      try {
+        const { doc, setDoc } = await import("firebase/firestore");
+        const { db } = await import("./lib/firebase");
+        await setDoc(doc(db, "user_images", currentUser.uid), {
+          images: newImages,
+          updatedAt: new Date().toISOString()
+        });
+      } catch (err) {
+        console.error("Failed to sync generated images to Firestore", err);
+      }
+    }
   };
 
   // 1. Generate core campaign copywriting & structure
@@ -161,7 +303,7 @@ export default function App() {
     }
 
     try {
-      const res = await fetch('/api/generate-campaign', {
+      const res = await fetch(`${API_BASE_URL}/api/generate-campaign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -181,7 +323,7 @@ export default function App() {
       if (data.suggestedVisualPrompt) {
         try {
           setIsGeneratingImage(true);
-          const imgRes = await fetch('/api/generate-image', {
+          const imgRes = await fetch(`${API_BASE_URL}/api/generate-image`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -269,7 +411,7 @@ export default function App() {
     setSuccessMsg(null);
 
     try {
-      const res = await fetch('/api/generate-image', {
+      const res = await fetch(`${API_BASE_URL}/api/generate-image`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt, size, aspectRatio }),
@@ -321,7 +463,7 @@ export default function App() {
   // 3. Multi-turn chatbot model API runner
   const handleSendChatMessage = async (role: 'strategist' | 'copywriter' | 'editor', chatHistory: ChatMessage[]) => {
     try {
-      const res = await fetch('/api/chat', {
+      const res = await fetch(`${API_BASE_URL}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -435,7 +577,14 @@ export default function App() {
     setActiveTab('canvas');
   };
 
-  const handleLogOut = () => {
+  const handleLogOut = async () => {
+    try {
+      const { signOut } = await import("firebase/auth");
+      const { auth } = await import("./lib/firebase");
+      await signOut(auth);
+    } catch (err) {
+      console.error("Firebase SignOut failed", err);
+    }
     setCurrentUser(null);
     setIsGuest(false);
     localStorage.removeItem('campaign_current_user');

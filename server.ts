@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
@@ -9,6 +10,13 @@ dotenv.config();
 async function startServer() {
   const app = express();
   const PORT = 3000;
+
+  // Enable CORS to support hybrid deployments (frontend on Vercel, backend on Render)
+  app.use(cors({
+    origin: "*",
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"]
+  }));
 
   // Crucial: parse JSON bodies with a generous limit to support base64 imagery or large drafts
   app.use(express.json({ limit: "50mb" }));
