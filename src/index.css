@@ -1,0 +1,74 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Custom minimal premium scrollbars for all scrollable wrappers */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(26, 26, 26, 0.12);
+  border-radius: 0px;
+  transition: background 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(26, 26, 26, 0.35);
+}
+
+/* Hide native cursor on desktop fine pointing devices to replace with our lag-free lag custom cursor */
+@media (pointer: fine) {
+  .custom-cursor-active,
+  .custom-cursor-active * {
+    cursor: none !important;
+  }
+}
+
+/* Base fade-in and other helper utilities */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Custom text cursor pulsing typing indicator */
+@keyframes typingPulse {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 1; }
+}
+
+.typing-pulse-cursor {
+  animation: typingPulse 0.8s infinite ease-in-out;
+}
+
+/* Smooth micro-shimmers for premium visual effects */
+@keyframes fineShimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.premium-shimmer {
+  background: linear-gradient(90deg, transparent, rgba(26, 26, 26, 0.03), transparent);
+  background-size: 200% 100%;
+  animation: fineShimmer 2.5s infinite linear;
+}

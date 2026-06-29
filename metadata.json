@@ -1,0 +1,8 @@
+{
+  "name": "Email Marketing Campaign Generator",
+  "description": "An advanced tool that generates complete email marketing campaigns, including subject lines, preview text, copy, layout styling, performance analysis, and AI-generated visuals.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
